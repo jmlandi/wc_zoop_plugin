@@ -290,7 +290,8 @@ public function process_payment($order_id)
         }
     }
 
-    $seller_id = get_option('wc_zoop_seller_id', '');
+    $seller_info = wc_zoop_get_seller_id_for_order($order);
+    $seller_id   = $seller_info['seller_id'];
     if (empty($seller_id)) {
         error_log('WC Letztech-payment Boleto: Seller ID não configurado');
         wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
@@ -326,19 +327,18 @@ public function process_payment($order_id)
     ];
 
 
-// === SPLIT CORRIGIDO: CAMPOS PLANOS (sem *100) ===
-$split_seller = get_option('wc_zoop_seller_id_split1', '');
-$split_percentage = get_option('wc_zoop_percentage_split1', 0);
+    $split_seller     = $seller_info['seller_id_split1'];
+    $split_percentage = floatval($seller_info['percentage_split1']);
 
-if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) {
-    $payload['seller_id_split1'] = sanitize_text_field($split_seller);
-    $payload['percentage_split1'] = floatval($split_percentage); // 40 → 40.0
-    error_log("WC Letztech PIX: Split ativado → seller_id_split1: {$split_seller}, percentage_split1: {$split_percentage}%");
-} else {
-    $payload['seller_id_split1'] = '';
-    $payload['percentage_split1'] = 0.0;
-    error_log('WC Letztech PIX: Split desativado');
-}
+    if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) {
+        $payload['seller_id_split1']  = sanitize_text_field($split_seller);
+        $payload['percentage_split1'] = $split_percentage;
+        error_log("WC Letztech Boleto: Split ativado → seller_id_split1: {$split_seller}, percentage_split1: {$split_percentage}%");
+    } else {
+        $payload['seller_id_split1']  = '';
+        $payload['percentage_split1'] = 0.0;
+        error_log('WC Letztech Boleto: Split desativado');
+    }
     error_log('WC Letztech-payment Boleto: Payload final: ' . json_encode($payload, JSON_PRETTY_PRINT));
 
     $response = wp_remote_post('http://186.249.36.174/api/transactions/boleto', [
@@ -378,9 +378,12 @@ if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) 
         $order->update_meta_data('_letztech_boleto_document_number', sanitize_text_field($document_number));
         $order->update_meta_data('_letztech_boleto_expiration', sanitize_text_field($boleto_expiration));
         $order->update_meta_data('_letztech_boleto_amount', $boleto_amount);
+        $order->update_meta_data('_letztech_resolved_seller_id', $seller_id);
         $order->set_transaction_id($transaction_id);
         $order->update_status('on-hold', 'Aguardando pagamento do boleto');
+        $sku_note = !empty($seller_info['sku_used']) ? " (SKU: {$seller_info['sku_used']})" : '';
         $order->add_order_note("Boleto gerado. ID: {$transaction_id}, Valor: R$ " . number_format($boleto_amount, 2, ',', '.'));
+        $order->add_order_note("Pagamento processado com Seller ID: {$seller_id}{$sku_note}");
         $order->save();
 
         // Armazenar na sessão para thank you page

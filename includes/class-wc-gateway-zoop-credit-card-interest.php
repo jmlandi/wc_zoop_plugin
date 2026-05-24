@@ -94,9 +94,7 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
     {
         error_log('WC Letztech-payment: Renderizando campos de cartão');
 
-        $total = WC()->cart->get_total('edit');
-        if (is_a($total, 'WC_Price')) $total = floatval($total->get_amount());
-        $total = floatval($total);
+        $total = floatval(WC()->cart->get_total('edit'));
 
         $min_installment = floatval(get_option('wc_zoop_min_installment', 0));
         $installment_options = [];
@@ -199,7 +197,8 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
             }
         }
 
-        $seller_id = get_option('wc_zoop_seller_id') ?: get_option('wc_letztech_seller_id');
+        $seller_info = wc_zoop_get_seller_id_for_order($order);
+        $seller_id   = $seller_info['seller_id'];
         if (empty($seller_id)) {
             wc_add_notice('Erro interno: Seller ID não configurado.', 'error');
             return;
@@ -244,8 +243,8 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
             ]
         ];
 
-        $split_seller = get_option('wc_zoop_seller_id_split1');
-        $split_perc = floatval(get_option('wc_zoop_percentage_split1', 0));
+        $split_seller = $seller_info['seller_id_split1'];
+        $split_perc   = floatval($seller_info['percentage_split1']);
         if (!empty($split_seller) && $split_perc > 0 && $split_perc <= 100) {
             $payload['seller_id_split1'] = $split_seller;
             $payload['percentage_split1'] = $split_perc;
@@ -286,7 +285,9 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
         error_log("WC Letztech-payment: Resposta API (código $code): $body_raw");
 
         if ($code == 201 && !empty($body['idTransacao'])) {
-            update_post_meta($order_id, '_letztech_transaction_id', $body['idTransacao']);
+            $order->update_meta_data('_letztech_transaction_id', $body['idTransacao']);
+            $order->update_meta_data('_letztech_resolved_seller_id', $seller_id);
+            $order->save();
             // $order->update_status('completed', 'Pagamento aprovado via Letztech'); // Modo antigo
             
             // Verifica se deve marcar como processing ou completed
@@ -298,7 +299,9 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
             // final do bloco
 
             $order->payment_complete($body['idTransacao']);
+            $sku_note = !empty($seller_info['sku_used']) ? " (SKU: {$seller_info['sku_used']})" : '';
             $order->add_order_note("Transação Letztech: {$body['idTransacao']}");
+            $order->add_order_note("Pagamento processado com Seller ID: {$seller_id}{$sku_note}");
             wc_reduce_stock_levels($order_id);
             WC()->cart->empty_cart();
 
