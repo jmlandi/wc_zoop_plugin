@@ -112,8 +112,8 @@ class WC_Gateway_Zoop_PIX extends WC_Payment_Gateway
             '1.0.0',
             true
         );
-        $emv = get_post_meta($order_id, '_zoop_pix_emv', true);
-        $id_transacao = get_post_meta($order_id, '_zoop_pix_id_transacao', true);
+        $emv          = $order->get_meta('_zoop_pix_emv');
+        $id_transacao = $order->get_meta('_zoop_pix_id_transacao');
         error_log('WC Letztech PIX: EMV para o pedido #' . $order_id . ': ' . ($emv ? $emv : 'Não encontrado'));
         error_log('WC Letztech PIX: ID Transação para o pedido #' . $order_id . ': ' . ($id_transacao ? $id_transacao : 'Não encontrado'));
         wp_localize_script(
@@ -148,7 +148,8 @@ public function process_payment($order_id)
         return;
     }
 
-    $seller_id = get_option('wc_zoop_seller_id', '');
+    $seller_info = wc_zoop_get_seller_id_for_order($order);
+    $seller_id   = $seller_info['seller_id'];
     if (empty($seller_id)) {
         wc_add_notice(__('Erro: Seller ID não configurado.', 'wc-zoop-payments'), 'error');
         return;
@@ -157,28 +158,28 @@ public function process_payment($order_id)
     $api_url = 'http://186.249.36.174/api/transactions/pix';
 
     $payload = [
-        'seller_id' => sanitize_text_field($seller_id),
-        'amount' => floatval($order->get_total()),
-        'description' => 'PIX #' . $order_id
+        'seller_id'   => sanitize_text_field($seller_id),
+        'amount'      => floatval($order->get_total()),
+        'description' => 'PIX #' . $order_id,
     ];
 
-// === SPLIT CORRIGIDO: CAMPOS PLANOS (sem *100) ===
-$split_seller = get_option('wc_zoop_seller_id_split1', '');
-$split_percentage = get_option('wc_zoop_percentage_split1', 0);
+    $split_seller     = $seller_info['seller_id_split1'];
+    $split_percentage = floatval($seller_info['percentage_split1']);
 
-if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) {
-    $payload['seller_id_split1'] = sanitize_text_field($split_seller);
-    $payload['percentage_split1'] = floatval($split_percentage); // 40 → 40.0
-    error_log("WC Letztech PIX: Split ativado → seller_id_split1: {$split_seller}, percentage_split1: {$split_percentage}%");
-} else {
-    $payload['seller_id_split1'] = '';
-    $payload['percentage_split1'] = 0.0;
-    error_log('WC Letztech PIX: Split desativado');
-}
+    if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) {
+        $payload['seller_id_split1']  = sanitize_text_field($split_seller);
+        $payload['percentage_split1'] = $split_percentage;
+        error_log("WC Letztech PIX: Split ativado → seller_id_split1: {$split_seller}, percentage_split1: {$split_percentage}%");
+    } else {
+        $payload['seller_id_split1']  = '';
+        $payload['percentage_split1'] = 0.0;
+        error_log('WC Letztech PIX: Split desativado');
+    }
 
     // === SALVA O JSON BRUTO NO PEDIDO ===
     $json_bruto = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    update_post_meta($order_id, '_zoop_pix_json_enviado', $json_bruto);
+    $order->update_meta_data('_zoop_pix_json_enviado', $json_bruto);
+    $order->save();
     error_log('WC Letztech PIX: JSON salvo no pedido #' . $order_id . ': ' . $json_bruto);
 
     // === ENVIA PARA API ===
@@ -204,10 +205,14 @@ if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) 
     }
 
     if ($code == 201 && isset($body['emv'], $body['idTransacao'])) {
-        update_post_meta($order_id, '_zoop_pix_emv', sanitize_text_field($body['emv']));
-        update_post_meta($order_id, '_zoop_pix_id_transacao', sanitize_text_field($body['idTransacao']));
+        $order->update_meta_data('_zoop_pix_emv', sanitize_text_field($body['emv']));
+        $order->update_meta_data('_zoop_pix_id_transacao', sanitize_text_field($body['idTransacao']));
+        $order->update_meta_data('_letztech_resolved_seller_id', $seller_id);
+        $order->save();
         $order->update_status('on-hold', 'Aguardando PIX');
+        $sku_note = !empty($seller_info['sku_used']) ? " (SKU: {$seller_info['sku_used']})" : '';
         $order->add_order_note('PIX gerado. ID: ' . $body['idTransacao']);
+        $order->add_order_note("Pagamento processado com Seller ID: {$seller_id}{$sku_note}");
         wc_reduce_stock_levels($order_id);
         WC()->cart->empty_cart();
 
@@ -228,8 +233,8 @@ if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) 
         return;
     }
 
-    $emv = get_post_meta($order_id, '_zoop_pix_emv', true);
-    $json_bruto = get_post_meta($order_id, '_zoop_pix_json_enviado', true);
+    $emv        = $order->get_meta('_zoop_pix_emv');
+    $json_bruto = $order->get_meta('_zoop_pix_json_enviado');
 
     if (empty($emv)) {
         echo '<p>' . esc_html__('Erro: Código PIX não disponível.', 'wc-zoop-payments') . '</p>';
@@ -386,7 +391,10 @@ function zoop_verificar_pagamento_pix()
     error_log("WC Letztech-payment PIX: Verificando pagamentos");
 
     $orders = wc_get_orders([
-        'status' => 'on-hold',
+        'status'         => 'on-hold',
+        'payment_method' => 'zoop_pix',
+        'meta_key'       => '_zoop_pix_id_transacao',
+        'meta_compare'   => 'EXISTS',
     ]);
 
     if (empty($orders)) {
@@ -402,7 +410,7 @@ function zoop_verificar_pagamento_pix()
         $order_id = $order->get_id();
         error_log('WC Letztech-payment PIX: Verificando pagamento para o pedido #' . $order_id);
 
-        $id_transacao = get_post_meta($order_id, '_zoop_pix_id_transacao', true);
+        $id_transacao = $order->get_meta('_zoop_pix_id_transacao');
 
         if (!$id_transacao)
             continue;
