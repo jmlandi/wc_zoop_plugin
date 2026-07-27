@@ -8,7 +8,6 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
 {
     public function __construct()
     {
-        error_log('WC Letztech-payment Cartão de Crédito: Entrando no construtor');
         $this->id = 'zoop_credit_card';
         $this->method_title = __('Cartão de Crédito Letztech', 'wc-zoop-payments');
         $this->method_description = __('Pague com cartão de crédito via API Letztech', 'wc-zoop-payments');
@@ -20,10 +19,38 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
         $this->init_settings();
 
         $this->enabled = $this->get_option('enabled', 'yes');
-        $this->description = $this->get_option('description', __('Pague com cartão de crédito via nossa API Letztech segura', 'wc-zoop-payments'));
+        $this->description = $this->get_option('description', __('Pague com cartão de crédito via nossa API Letztech', 'wc-zoop-payments'));
 
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, [$this, 'process_admin_options']);
         add_action('wp_footer', [$this, 'add_payment_scripts']);
+        add_action('wp_enqueue_scripts', [$this, 'enqueue_tokenize_script']);
+    }
+
+    public function enqueue_tokenize_script()
+    {
+        if (!is_checkout()) return;
+
+        wp_enqueue_script(
+            'zoop-tokenize',
+            plugins_url('../assets/zoop-tokenize.js', __FILE__),
+            ['jquery', 'wc-checkout'],
+            '1.0.0',
+            true
+        );
+
+        wp_localize_script(
+            'zoop-tokenize',
+            'zoopTokenizeData',
+            [
+                'marketplaceId' => get_option('wc_zoop_marketplace_id', ''),
+                'publishableKey' => get_option('wc_zoop_publishable_key', ''),
+                'i18n' => [
+                    'missingConfig' => __('Configuração da Zoop incompleta: Marketplace ID ou Publishable Key não definidos.', 'wc-zoop-payments'),
+                    'tokenizeFailed' => __('Falha ao tokenizar cartão', 'wc-zoop-payments'),
+                    'errorPrefix' => __('Erro ao processar cartão:', 'wc-zoop-payments'),
+                ],
+            ]
+        );
     }
 
     public function init_form_fields()
@@ -74,6 +101,13 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
                 $('#card_expiry_month').on('input', function () { this.value = this.value.replace(/\D/g, '').slice(0,2); });
                 $('#card_expiry_year').on('input', function () { this.value = this.value.replace(/\D/g, '').slice(0,4); });
                 $('#card_security_code').on('input', function () { this.value = this.value.replace(/\D/g, '').slice(0,4); });
+                $('#customer_cpf').on('input', function () {
+                    let v = this.value.replace(/\D/g, '').slice(0,11);
+                    if (v.length > 9) v = v.slice(0,3) + '.' + v.slice(3,6) + '.' + v.slice(6,9) + '-' + v.slice(9);
+                    else if (v.length > 6) v = v.slice(0,3) + '.' + v.slice(3,6) + '.' + v.slice(6);
+                    else if (v.length > 3) v = v.slice(0,3) + '.' + v.slice(3);
+                    this.value = v;
+                });
                 $('#enderCEP').on('input', function () {
                     let v = this.value.replace(/\D/g, '');
                     if (v.length > 5) v = v.slice(0,5) + '-' + v.slice(5,8);
@@ -92,8 +126,6 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
 
     public function payment_fields()
     {
-        error_log('WC Letztech-payment: Renderizando campos de cartão');
-
         $total = floatval(WC()->cart->get_total('edit'));
 
         $min_installment = floatval(get_option('wc_zoop_min_installment', 0));
@@ -108,7 +140,6 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
             'total'       => number_format($total_1x, 2, '.', ''),
             'interest'    => number_format($interest_1, 1, '.', '')
         ];
-        error_log("WC Letztech-payment: 1x → juros lido: {$interest_1}% | parcela: R$ " . $installment_options[1]['installment']);
 
         for ($i = 2; $i <= 12; $i++) {
             $interest = floatval(get_option("wc_zoop_interest_{$i}", 0));
@@ -121,7 +152,6 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
                     'total'       => number_format($total_with, 2, '.', ''),
                     'interest'    => number_format($interest, 1, '.', '')
                 ];
-                error_log("WC Letztech-payment: {$i}x → juros lido: {$interest}% | parcela: R$ " . $installment_options[$i]['installment']);
             }
         }
 
@@ -136,6 +166,10 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
             <div class="form-row">
                 <label for="card_holder_name"><?php _e('Nome do Titular', 'wc-zoop-payments'); ?> <span class="required">*</span></label>
                 <input type="text" id="card_holder_name" name="card_holder_name" placeholder="João Silva" required>
+            </div>
+            <div class="form-row">
+                <label for="customer_cpf"><?php _e('CPF do Titular', 'wc-zoop-payments'); ?> <span class="required">*</span></label>
+                <input type="text" id="customer_cpf" name="customer_cpf" placeholder="123.456.789-00" maxlength="14" required>
             </div>
             <div class="form-row">
                 <label for="card_number"><?php _e('Número do Cartão', 'wc-zoop-payments'); ?> <span class="required">*</span></label>
@@ -175,21 +209,24 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
                 <label for="enderCEP"><?php _e('CEP', 'wc-zoop-payments'); ?> <span class="required">*</span></label>
                 <input type="text" id="enderCEP" name="enderCEP" placeholder="12345-678" maxlength="9" required>
             </div>
+            <input type="hidden" id="card_token" name="card_token" value="">
         </div>
         <?php
     }
 
     public function process_payment($order_id)
     {
-        error_log("WC Letztech-payment: Iniciando process_payment para pedido #$order_id");
-
         $order = wc_get_order($order_id);
         if (!$order) {
             wc_add_notice('Pedido não encontrado.', 'error');
             return;
         }
 
-        $fields = ['card_holder_name', 'card_number', 'card_expiry_month', 'card_expiry_year', 'card_security_code', 'number_installments', 'enderCEP'];
+        // Raw card fields (card_number, card_expiry_month/year, card_security_code) are
+        // stripped client-side by assets/zoop-tokenize.js before submit — they never
+        // reach this backend. card_token (from Zoop's client-side tokenization) is what
+        // we actually need here; see class docblock / zoop-tokenize.js for why.
+        $fields = ['card_holder_name', 'customer_cpf', 'card_token', 'number_installments', 'enderCEP'];
         foreach ($fields as $f) {
             if (empty($_POST[$f])) {
                 wc_add_notice("Preencha o campo: $f", 'error');
@@ -207,96 +244,51 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
         $total = floatval($order->get_total());
         $num_installments = intval($_POST['number_installments']);
 
-        // AMOUNT EM REAIS (INTEIRO) - API LETZTECH NÃO USA CENTAVOS
         $interest_percent = floatval(get_option("wc_zoop_interest_{$num_installments}", 0));
-        error_log("WC Letztech-payment: Aplicando juros de {$interest_percent}% para {$num_installments}x");
+        $total_com_juros = round($total * (1 + $interest_percent / 100), 2);
 
-        $total_com_juros = $total * (1 + $interest_percent / 100);
-        $total_com_juros = round($total_com_juros, 2);
-        $amount_in_reais = (int) round($total_com_juros);
-
-        error_log("WC Letztech-payment: Total original: R$ {$total} | Total com juros: R$ {$total_com_juros} | Amount enviado: {$amount_in_reais} (REAIS)");
-
+        // Routes through the Letztech gateway (api.letstech.com.br) instead of the
+        // legacy Zoop-direct backend — that backend sends raw card data server-side,
+        // which Zoop now blocks for KYC-approved accounts. The gateway auto-provisions
+        // a store from seller_id on first use; see src/woocommerce/ in letztech-gateway.
         $payload = [
-            'seller_id' => $seller_id,
-            'amount' => $amount_in_reais,
+            'sellerId' => $seller_id,
+            'orderId' => (string) $order_id,
+            'amount' => $total_com_juros,
             'description' => "Pedido WooCommerce #$order_id",
-            'number_installments' => $num_installments,
-            'enderCEP' => sanitize_text_field($_POST['enderCEP']),
-            'card' => [
-                'holder_name' => sanitize_text_field($_POST['card_holder_name']),
-                'expiration_month' => str_pad(sanitize_text_field($_POST['card_expiry_month']), 2, '0', STR_PAD_LEFT),
-                'expiration_year' => sanitize_text_field($_POST['card_expiry_year']),
-                'card_number' => preg_replace('/\s+/', '', $_POST['card_number']),
-                'security_code' => sanitize_text_field($_POST['card_security_code'])
+            'installments' => $num_installments,
+            'customer' => [
+                'name' => sanitize_text_field($_POST['card_holder_name']),
+                'document' => preg_replace('/\D/', '', $_POST['customer_cpf']),
+                'email' => sanitize_email($order->get_billing_email()),
+                'phone' => preg_replace('/\D/', '', $order->get_billing_phone() ?: ''),
             ],
-            'three_d_secure' => [
-                'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? 'WooCommerce',
-                'device' => [
-                    'color_depth' => $_POST['device_color_depth'] ?? 24,
-                    'java_enabled' => false,
-                    'language' => $_POST['device_language'] ?? 'pt-BR',
-                    'screen_height' => $_POST['device_screen_height'] ?? 1080,
-                    'screen_width' => $_POST['device_screen_width'] ?? 1920,
-                    'time_zone_offset' => $_POST['device_time_zone'] ?? -180
-                ]
-            ]
+            // Tokenized client-side (assets/zoop-tokenize.js) — raw card data never
+            // reaches this server, matching Zoop's requirement for KYC-approved
+            // accounts that card tokenization happen only in the browser.
+            'source' => [
+                'tokenId' => sanitize_text_field($_POST['card_token']),
+            ],
         ];
 
-        $split_seller = $seller_info['seller_id_split1'];
-        $split_perc   = floatval($seller_info['percentage_split1']);
-        if (!empty($split_seller) && $split_perc > 0 && $split_perc <= 100) {
-            $payload['seller_id_split1'] = $split_seller;
-            $payload['percentage_split1'] = $split_perc;
-            error_log("WC Letztech-payment: Split ativado → seller: $split_seller | porcentagem: $split_perc%");
-        }
+        $result = wc_letztech_gateway_request('/woocommerce/payment', $payload);
 
-        $payload_json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-
-        // <<< JSON COMENTADO - DESCOMENTE SE PRECISAR VER NOVAMENTE >>>
-        // error_log('WC Letztech-payment: JSON enviado → ' . $payload_json);
-        // <<< FIM >>>
-
-        error_log('WC Letztech-payment: AMOUNT CORRETO: ' . $amount_in_reais . ' | number_installments: ' . $num_installments);
-
-        // Teste com URL alternativa da API Letztech
-        // $response = wp_remote_post('http://186.249.36.174/api/transactions?teste=true&test=true', [
-        //     'body' => $payload_json,
-        //     'headers' => ['Content-Type' => 'application/json'],
-        //     'timeout' => 45
-        // ]);
-
-        $response = wp_remote_post('http://186.249.36.174/api/transactions', [
-            'body' => $payload_json,
-            'headers' => ['Content-Type' => 'application/json'],
-            'timeout' => 45
-        ]);
-
-        if (is_wp_error($response)) {
-            $msg = $response->get_error_message();
-            wc_add_notice("Erro de conexão: $msg", 'error');
+        if (!$result['ok']) {
+            wc_add_notice("Erro de conexão: {$result['error']}", 'error');
             return;
         }
 
-        $code = wp_remote_retrieve_response_code($response);
-        $body_raw = wp_remote_retrieve_body($response);
-        $body = json_decode($body_raw, true);
-
-        error_log("WC Letztech-payment: Resposta API (código $code): $body_raw");
+        $code = $result['code'];
+        $body = $result['body'];
 
         if ($code == 201 && !empty($body['idTransacao'])) {
             $order->update_meta_data('_letztech_transaction_id', $body['idTransacao']);
             $order->update_meta_data('_letztech_resolved_seller_id', $seller_id);
             $order->save();
-            // $order->update_status('completed', 'Pagamento aprovado via Letztech'); // Modo antigo
-            
-            // Verifica se deve marcar como processing ou completed
+
             $completed_as_processing = get_option('wc_zoop_completed_as_processing') === 'yes';
-
             $status = $completed_as_processing ? 'processing' : 'completed';
-
             $order->update_status($status, 'Pagamento aprovado via Letztech');
-            // final do bloco
 
             $order->payment_complete($body['idTransacao']);
             $sku_note = !empty($seller_info['sku_used']) ? " (SKU: {$seller_info['sku_used']})" : '';
@@ -311,23 +303,17 @@ class WC_Gateway_Zoop_Credit_Card_Interest extends WC_Payment_Gateway
             ];
         } else {
             $error_msg = $body['error']['message'] ?? $body['message'] ?? 'Erro';
-
-            $full_error = "Pagamento recusado: {$error_msg}";
-
-            // Ainda mostra o JSON no erro (útil para debug)
-            $pretty_json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-      /*       $full_error .= '<br><br><strong>JSON enviado para a API:</strong><br><pre style="background:#f1f1f1;padding:15px;border:1px solid #ccc;overflow-x:auto;max-height:400px;">'
-                         . htmlspecialchars($pretty_json) . '</pre>';
- */
             $order->update_status('failed', "Letztech: $error_msg");
-            wc_add_notice($full_error, 'error');
+            wc_add_notice("Pagamento recusado: {$error_msg}", 'error');
         }
     }
 
+    // KNOWN GAP: process_payment() now stores the Letztech gateway's own payment ID
+    // (pay_...) in _letztech_transaction_id, but this still polls the legacy backend,
+    // which has never heard of that ID -- status polling for card orders is broken
+    // until the gateway exposes a status/webhook endpoint (tracked separately).
     public function check_transaction_status($transaction_id)
     {
-        error_log("WC Letztech-payment: Consultando status da transação $transaction_id");
-
         $response = wp_remote_get("http://186.249.36.174/api/transactions/{$transaction_id}", [
             'headers' => [
                 'Content-Type' => 'application/json',
