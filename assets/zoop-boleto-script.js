@@ -1,3 +1,7 @@
+// KNOWN GAP: pollStatus() below hits the legacy backend (186.249.36.174) directly
+// from the browser with the Letztech gateway's own payment ID (pay_...), which that
+// backend has never heard of -- same gap as pix-script.js and
+// check_transaction_status() in class-wc-gateway-zoop-boleto.php.
 jQuery(document).ready(function ($) {
   console.log(
     "WC Letztech-payment Boleto: Inicializando Barcode na página de agradecimento"

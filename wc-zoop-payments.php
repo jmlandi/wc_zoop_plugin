@@ -2,14 +2,29 @@
 /*
 Plugin Name: WooCommerce Letztech Gateway
 Description: Custom payment gateways for Letztech (Credit Card, PIX, Recurrence, Boleto)
-Version: 1.5.0
-Author: Softkuka
+Version: 2.0.0-alpha
+Author: Marcos Landi
 Text Domain: wc-zoop-payments
 */
 
 if (!defined('ABSPATH')) {
     error_log('WC Letztech-payment: ABSPATH not defined, exiting');
     exit;
+}
+
+// =============================================
+// LETZTECH GATEWAY (api.letstech.com.br)
+// =============================================
+// Single shared key across all merchant installs -- not per-store credentials.
+// Stores are auto-provisioned server-side from seller_id on first request; see
+// src/woocommerce/ in the letztech-gateway repo.
+// Override in wp-config.php on any install where a distinct value is wanted
+// (this file ships identically to every merchant, wp-config.php does not).
+if (!defined('LETZTECH_GATEWAY_URL')) {
+    define('LETZTECH_GATEWAY_URL', 'https://api.letstech.com.br');
+}
+if (!defined('LETZTECH_GATEWAY_SHARED_KEY')) {
+    define('LETZTECH_GATEWAY_SHARED_KEY', 'c9f0e3e3476dd0d523e1b3256f1783d6911b076fee7f2aa3');
 }
 
 // =============================================
@@ -47,7 +62,11 @@ function wc_zoop_payment_init() {
     error_log('WC Letztech-payment: Initializing plugin');
 
     require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-pix.php';
-    require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-recurrence.php';
+    // Recurrence disabled: the Letztech gateway has no subscription/recurring-billing
+    // support at all (no endpoint exists), so this can't be migrated off the legacy
+    // backend like the others were. File kept for when that support gets built --
+    // see class-wc-gateway-zoop-recurrence.php and the tracking issue for this.
+    // require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-recurrence.php';
     require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-boleto.php';
     require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-credit-card-interest.php';
 
@@ -220,7 +239,8 @@ function wc_zoop_add_gateways($gateways) {
     error_log('WC Letztech-payment: Adding gateways');
     $gateways[] = 'WC_Gateway_Zoop_Credit_Card_Interest';
     $gateways[] = 'WC_Gateway_Zoop_PIX';
-    $gateways[] = 'WC_Gateway_Zoop_Recurrence';
+    // See disabled require_once above -- no backend support to run this through yet.
+    // $gateways[] = 'WC_Gateway_Zoop_Recurrence';
     $gateways[] = 'WC_Gateway_Zoop_Boleto';
     error_log('WC Letztech-payment: Gateways added: ' . print_r($gateways, true));
     return $gateways;
@@ -288,9 +308,28 @@ function wc_zoop_register_settings() {
     );
 
     // Global settings
+    register_setting('wc_zoop_settings_group', 'wc_zoop_marketplace_id', [
+        'type'              => 'string',
+        'sanitize_callback' => 'sanitize_text_field',
+        'default'           => '',
+    ]);
+    register_setting('wc_zoop_settings_group', 'wc_zoop_publishable_key', [
+        'type'              => 'string',
+        'sanitize_callback' => 'sanitize_text_field',
+        'default'           => '',
+    ]);
     register_setting('wc_zoop_settings_group', 'wc_zoop_seller_id', [
         'type'              => 'string',
         'sanitize_callback' => 'sanitize_text_field',
+        'default'           => '',
+    ]);
+    // Not used yet — requests still identify the store by Seller ID. Reserved
+    // for a future refactor where the Letztech gateway is addressed by this
+    // slug instead of a raw Zoop seller_id, removing the Zoop dependency from
+    // this plugin's public-facing config.
+    register_setting('wc_zoop_settings_group', 'wc_zoop_seller_slug', [
+        'type'              => 'string',
+        'sanitize_callback' => 'sanitize_title',
         'default'           => '',
     ]);
     register_setting('wc_zoop_settings_group', 'wc_zoop_seller_id_split1', [
@@ -340,7 +379,10 @@ function wc_zoop_register_settings() {
         );
     }
 
+    add_settings_field('wc_zoop_marketplace_id', __('Zoop Marketplace ID', 'wc-zoop-payments'), 'wc_zoop_marketplace_id_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_marketplace_id']);
+    add_settings_field('wc_zoop_publishable_key', __('Zoop Publishable Key (ZPK)', 'wc-zoop-payments'), 'wc_zoop_publishable_key_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_publishable_key']);
     add_settings_field('wc_zoop_seller_id', __('Seller ID', 'wc-zoop-payments'), 'wc_zoop_seller_id_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_seller_id']);
+    add_settings_field('wc_zoop_seller_slug', __('Seller Slug (reservado para uso futuro)', 'wc-zoop-payments'), 'wc_zoop_seller_slug_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_seller_slug']);
     add_settings_field('wc_zoop_seller_id_split1', __('Seller ID Split 1', 'wc-zoop-payments'), 'wc_zoop_seller_id_split1_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_seller_id_split1']);
     add_settings_field('wc_zoop_percentage_split1', __('Porcentagem Split 1 (%)', 'wc-zoop-payments'), 'wc_zoop_percentage_split1_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_percentage_split1']);
     add_settings_field('wc_zoop_min_installment', __('Valor Mínimo da Parcela (R$)', 'wc-zoop-payments'), 'wc_zoop_min_installment_callback', 'wc_zoop_settings', 'wc_zoop_global_settings', ['label_for' => 'wc_zoop_min_installment']);
@@ -367,6 +409,22 @@ function wc_zoop_sanitize_sku_seller_map($input) {
 // SETTINGS FIELD CALLBACKS
 // =============================================
 
+function wc_zoop_marketplace_id_callback() {
+    $marketplace_id = get_option('wc_zoop_marketplace_id', '');
+    ?>
+    <input type="text" id="wc_zoop_marketplace_id" name="wc_zoop_marketplace_id" value="<?php echo esc_attr($marketplace_id); ?>" class="regular-text" />
+    <p class="description"><?php _e('ID do marketplace Zoop. Necessário para a tokenização de cartão feita no navegador do cliente.', 'wc-zoop-payments'); ?></p>
+    <?php
+}
+
+function wc_zoop_publishable_key_callback() {
+    $publishable_key = get_option('wc_zoop_publishable_key', '');
+    ?>
+    <input type="text" id="wc_zoop_publishable_key" name="wc_zoop_publishable_key" value="<?php echo esc_attr($publishable_key); ?>" class="regular-text" />
+    <p class="description"><?php _e('Publishable Key (ZPK) fornecida pela Zoop — segura para uso no navegador. Não confundir com a API key privada ou o x-api-key do mTLS, que nunca devem ser expostos no front-end.', 'wc-zoop-payments'); ?></p>
+    <?php
+}
+
 function wc_zoop_seller_id_callback() {
     $seller_id = get_option('wc_zoop_seller_id', '');
     error_log('WC Letztech-payment: Rendering seller_id field, current value: ' . $seller_id);
@@ -375,6 +433,14 @@ function wc_zoop_seller_id_callback() {
     <p class="description"><?php _e('Insira o ID do vendedor fornecido pela Letztech para solicitações de API.', 'wc-zoop-payments'); ?></p>
     <?php
     error_log('WC Letztech-payment: Seller ID field rendered');
+}
+
+function wc_zoop_seller_slug_callback() {
+    $seller_slug = get_option('wc_zoop_seller_slug', '');
+    ?>
+    <input type="text" id="wc_zoop_seller_slug" name="wc_zoop_seller_slug" value="<?php echo esc_attr($seller_slug); ?>" class="regular-text" />
+    <p class="description"><?php _e('Ainda não utilizado pelas requisições — reservado para uma futura migração que identifica a loja por este slug em vez do Seller ID da Zoop.', 'wc-zoop-payments'); ?></p>
+    <?php
 }
 
 function wc_zoop_min_installment_callback() {
@@ -483,6 +549,39 @@ function wc_zoop_add_settings_link($links) {
     array_unshift($links, $settings_link);
     error_log('WC Letztech-payment: Settings link added to plugins page');
     return $links;
+}
+
+// =============================================
+// LETZTECH GATEWAY HELPER
+// Shared by every gateway class that talks to api.letstech.com.br. Add new
+// endpoints here as each payment method migrates off the legacy backend.
+// =============================================
+
+/**
+ * @param string $endpoint Path under LETZTECH_GATEWAY_URL, e.g. '/woocommerce/payment'.
+ * @param array  $payload  Request body, JSON-encoded here.
+ * @return array{ok: bool, code?: int, body?: array, error?: string}
+ */
+function wc_letztech_gateway_request($endpoint, $payload) {
+    $response = wp_remote_post(LETZTECH_GATEWAY_URL . $endpoint, [
+        'body' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        'headers' => [
+            'Content-Type' => 'application/json',
+            'x-letztech-key' => LETZTECH_GATEWAY_SHARED_KEY,
+        ],
+        'timeout' => 45,
+    ]);
+
+    if (is_wp_error($response)) {
+        return ['ok' => false, 'error' => $response->get_error_message()];
+    }
+
+    $code = wp_remote_retrieve_response_code($response);
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+
+    error_log("WC Letztech-payment: {$endpoint} respondeu {$code}: " . wp_remote_retrieve_body($response));
+
+    return ['ok' => true, 'code' => $code, 'body' => $body];
 }
 
 // =============================================

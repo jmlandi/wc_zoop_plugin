@@ -1,4 +1,9 @@
 <?php
+// DISABLED as of the Letztech gateway migration (2026-07) -- not require_once'd or
+// registered in wc-zoop-payments.php anymore. The Letztech gateway has no
+// subscription/recurring-billing endpoint at all, so there's nothing for this to
+// call once the legacy backend (186.249.36.174) goes away. Still points at the
+// legacy backend throughout. Re-enable once that support exists server-side.
 if (!defined('ABSPATH')) {
     error_log('WC Letztech-payment Recorrência: ABSPATH não carregado, encerrando');
     exit;
@@ -24,7 +29,7 @@ class WC_Gateway_Zoop_Recurrence extends WC_Payment_Gateway {
         error_log('WC Letztech-payment Recorrência: Configurações inicializadas');
 
         $this->enabled = $this->get_option('enabled', 'yes');
-        $this->description = $this->get_option('description', __('Configure um pagamento recorrente com cartão de crédito via API Letztech segura', 'wc-zoop-payments'));
+        $this->description = $this->get_option('description', __('Configure um pagamento recorrente com cartão de crédito via API Letztech', 'wc-zoop-payments'));
         error_log('WC Letztech-payment Recorrência: Habilitado: ' . $this->enabled);
 
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, [$this, 'process_admin_options']);
@@ -57,7 +62,7 @@ class WC_Gateway_Zoop_Recurrence extends WC_Payment_Gateway {
                 'title' => __('Descrição', 'wc-zoop-payments'),
                 'type' => 'textarea',
                 'description' => __('Descrição exibida no checkout', 'wc-zoop-payments'),
-                'default' => __('Configure um pagamento recorrente com cartão de crédito via API Zoop segura', 'wc-zoop-payments')
+                'default' => __('Configure um pagamento recorrente com cartão de crédito via API Letztech', 'wc-zoop-payments')
             ]
         ];
         error_log('WC Letztech-payment Recorrência: Campos de formulário definidos');

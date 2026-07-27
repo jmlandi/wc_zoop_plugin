@@ -1,3 +1,9 @@
+// KNOWN GAP: pollStatus() below hits the legacy backend (186.249.36.174) directly
+// from the browser with the Letztech gateway's own payment ID (pay_...), which that
+// backend has never heard of -- live "Aguardando pagamento..." polling on the
+// thank-you page is broken for any order processed through the new gateway until a
+// status/webhook endpoint exists there. Same gap as check_transaction_status() in
+// class-wc-gateway-zoop-pix.php, just also duplicated here on the client side.
 jQuery(document).ready(function ($) {
   console.log(
     "WC Letztech PIX: Inicializando QR Code na página de agradecimento"
