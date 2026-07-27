@@ -2,8 +2,8 @@
 /*
 Plugin Name: WooCommerce Letztech Gateway
 Description: Custom payment gateways for Letztech (Credit Card, PIX, Recurrence, Boleto)
-Version: 1.5.0
-Author: Softkuka
+Version: 2.0.0-alpha
+Author: Marcos Landi
 Text Domain: wc-zoop-payments
 */
 
