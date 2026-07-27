@@ -1,4 +1,11 @@
 <?php
+// TODO: process_payment() routes through the Letztech gateway (api.letstech.com.br)
+// and is structurally correct/deployed, but every live boleto attempt gets an opaque
+// 500 from Zoop ("servers are acting up") that doesn't respond to payload changes --
+// unlike Pix/card, which each converged after fixing missing_required_param errors.
+// Confirmed not a CPF-checksum issue. Likely either this seller isn't enabled for
+// boleto specifically, or a genuine Zoop-side issue. Needs a check with Zoop support
+// before this can be trusted in production. See tracking issue.
 if (!defined('ABSPATH')) {
     error_log('WC Letztech-payment Boleto: ABSPATH não definido, encerrando');
     exit;
@@ -8,43 +15,31 @@ class WC_Gateway_Zoop_Boleto extends WC_Payment_Gateway
 {
     public function __construct()
     {
-        error_log('WC Letztech-payment Boleto: Entrando no construtor');
         $this->id = 'zoop_boleto';
         $this->method_title = __('Boleto Letztech-payment', 'wc-zoop-payments');
-        $this->method_description = __('Pague com Boleto Bancário via API Letztech-payment', 'wc-zoop-payments');
+        $this->method_description = __('Pague com Boleto Bancário via API Letztech', 'wc-zoop-payments');
         $this->title = $this->get_option('title', __('Boleto', 'wc-zoop-payments'));
         $this->has_fields = true;
         $this->supports = ['products'];
 
-        error_log('WC Letztech-payment Boleto: ID do gateway: ' . $this->id);
-        error_log('WC Letztech-payment Boleto: Título: ' . $this->title);
-        error_log('WC Letztech-payment Boleto: Possui campos: ' . ($this->has_fields ? 'true' : 'false'));
-
         $this->init_form_fields();
-        error_log('WC Letztech-payment Boleto: Campos de formulário inicializados');
-
         $this->init_settings();
-        error_log('WC Letztech-payment Boleto: Configurações inicializadas');
 
         $this->enabled = $this->get_option('enabled', 'yes');
-        $this->description = $this->get_option('description', __('Pague com Boleto Bancário via nossa API Letztech-payment segura', 'wc-zoop-payments'));
-        error_log('WC Letztech-payment Boleto: Habilitado: ' . $this->enabled);
-        error_log('WC Letztech-payment Boleto: Descrição: ' . $this->description);
+        $this->description = $this->get_option('description', __('Pague com Boleto Bancário via nossa API Letztech', 'wc-zoop-payments'));
 
         add_action('woocommerce_update_options_payment_gateways_' . $this->id, [$this, 'process_admin_options']);
         add_action('wp_footer', [$this, 'add_payment_scripts']);
         add_action('woocommerce_thankyou_' . $this->id, [$this, 'display_boleto_details']);
-        error_log('WC Letztech-payment Boleto: Ações registradas');
     }
 
     public function init_form_fields()
     {
-        error_log('WC Letztech-payment Boleto: Inicializando campos de formulário');
         $this->form_fields = [
             'enabled' => [
                 'title' => __('Ativar/Desativar', 'wc-zoop-payments'),
                 'type' => 'checkbox',
-                'label' => __('Ativar Boleto Zoop', 'wc-zoop-payments'),
+                'label' => __('Ativar Boleto', 'wc-zoop-payments'),
                 'default' => 'yes'
             ],
             'title' => [
@@ -57,7 +52,7 @@ class WC_Gateway_Zoop_Boleto extends WC_Payment_Gateway
                 'title' => __('Descrição', 'wc-zoop-payments'),
                 'type' => 'textarea',
                 'description' => __('Descrição exibida no checkout', 'wc-zoop-payments'),
-                'default' => __('Pague com Boleto Bancário via nossa API Zoop segura', 'wc-zoop-payments')
+                'default' => __('Pague com Boleto Bancário via nossa API LetzTech segura', 'wc-zoop-payments')
             ]
         ];
         error_log('WC Letztech-payment Boleto: Campos de formulário definidos: ' . print_r($this->form_fields, true));
@@ -65,13 +60,9 @@ class WC_Gateway_Zoop_Boleto extends WC_Payment_Gateway
 
     public function add_payment_scripts()
     {
-        error_log('WC Letztech-payment Boleto: Verificando se está na página de checkout');
-        error_log('WC Letztech-payment Boleto: Resultado de is_checkout(): ' . (is_checkout() ? 'true' : 'false'));
         if (!is_checkout()) {
-            error_log('WC Letztech-payment Boleto: Não está na página de checkout, ignorando scripts');
             return;
         }
-        error_log('WC Letztech-payment Boleto: Adicionando scripts ao checkout');
         ?>
         <style>
             #zoop-boleto-form .form-row {
@@ -168,11 +159,6 @@ class WC_Gateway_Zoop_Boleto extends WC_Payment_Gateway
 
     public function payment_fields()
     {
-        error_log('WC Letztech-payment Boleto: Renderizando campos de pagamento');
-        error_log('WC Letztech-payment Boleto: ID da página atual: ' . get_the_ID());
-        error_log('WC Letztech-payment Boleto: É página de checkout: ' . (is_checkout() ? 'true' : 'false'));
-
-  
         $brazilian_states = [
             'AC' => 'Acre',
             'AL' => 'Alagoas',
@@ -264,153 +250,118 @@ class WC_Gateway_Zoop_Boleto extends WC_Payment_Gateway
             </div>
         </div>
         <?php
-        error_log('WC Letztech-payment Boleto: Campos de pagamento renderizados');
-    }
-    
-public function process_payment($order_id)
-{
-    error_log('WC Letztech-payment Boleto: Processando pagamento para o pedido #' . $order_id);
-    $order = wc_get_order($order_id);
-    if (!$order) {
-        error_log('WC Letztech-payment Boleto: Pedido #' . $order_id . ' não encontrado');
-        wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
-        return;
     }
 
-    $required_fields = [
-        'billing_first_name', 'billing_last_name', 'customer_cpf', 'customer_birthdate',
-        'billing_email', 'billing_phone', 'billing_address_1', 'billing_address_2',
-        'billing_neighborhood', 'billing_city', 'billing_state', 'billing_postcode'
-    ];
-    foreach ($required_fields as $field) {
-        if (!isset($_POST[$field]) || empty($_POST[$field])) {
-            error_log('WC Letztech-payment Boleto: Campo ausente ou vazio: ' . $field);
-            wc_add_notice(__('Por favor, preencha todos os campos obrigatórios.', 'wc-zoop-payments'), 'error');
+    public function process_payment($order_id)
+    {
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
+            return;
+        }
+
+        $required_fields = [
+            'billing_first_name', 'billing_last_name', 'customer_cpf', 'customer_birthdate',
+            'billing_email', 'billing_phone', 'billing_address_1', 'billing_address_2',
+            'billing_neighborhood', 'billing_city', 'billing_state', 'billing_postcode'
+        ];
+        foreach ($required_fields as $field) {
+            if (!isset($_POST[$field]) || empty($_POST[$field])) {
+                wc_add_notice(__('Por favor, preencha todos os campos obrigatórios.', 'wc-zoop-payments'), 'error');
+                return;
+            }
+        }
+
+        $seller_info = wc_zoop_get_seller_id_for_order($order);
+        $seller_id   = $seller_info['seller_id'];
+        if (empty($seller_id)) {
+            wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
+            return;
+        }
+
+        // Routes through the Letztech gateway (api.letstech.com.br); see
+        // class-wc-gateway-zoop-credit-card-interest.php for the migration this
+        // followed and wc_letztech_gateway_request() for the shared request helper.
+        $payload = [
+            'sellerId' => $seller_id,
+            'orderId' => (string) $order_id,
+            'method' => 'boleto',
+            'amount' => floatval($order->get_total()),
+            'description' => 'Compra para o pedido #' . $order_id,
+            'customer' => [
+                'name' => sanitize_text_field($_POST['billing_first_name'] . ' ' . $_POST['billing_last_name']),
+                'document' => preg_replace('/\D/', '', $_POST['customer_cpf']),
+                'email' => sanitize_email($_POST['billing_email']),
+                'phone' => preg_replace('/\D/', '', $_POST['billing_phone']),
+                'address' => [
+                    'line1' => sanitize_text_field($_POST['billing_address_1'] . ', ' . $_POST['billing_address_2']),
+                    'line2' => sanitize_text_field($_POST['billing_address_3'] ?? ''),
+                    'city' => sanitize_text_field($_POST['billing_city']),
+                    'state' => sanitize_text_field($_POST['billing_state']),
+                    'postal_code' => preg_replace('/\D/', '', $_POST['billing_postcode']),
+                    'country' => 'BR',
+                ],
+            ],
+        ];
+
+        $result = wc_letztech_gateway_request('/woocommerce/payment', $payload);
+
+        if (!$result['ok']) {
+            wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
+            return;
+        }
+
+        $code = $result['code'];
+        $body = $result['body'];
+        $expiration_date = date('Y-m-d', strtotime('+7 days'));
+
+        if ($code == 201 && isset($body['idTransacao'])) {
+            $transaction_id = sanitize_text_field($body['idTransacao']);
+            $barcode = $body['barcode'] ?? '';
+            $boleto_url = $body['url'] ?? '';
+            // Not yet returned by the gateway -- see WooCommercePaymentResponse in
+            // src/woocommerce/woocommerce.service.ts if this needs to be added.
+            $document_number = $body['document_number'] ?? '';
+            $boleto_expiration = $body['expiration_date'] ?? $expiration_date;
+            $boleto_amount = floatval($order->get_total());
+
+            $order->update_meta_data('_letztech_transaction_id', $transaction_id);
+            $order->update_meta_data('_letztech_boleto_barcode', sanitize_text_field($barcode));
+            $order->update_meta_data('_letztech_boleto_url', esc_url_raw($boleto_url));
+            $order->update_meta_data('_letztech_boleto_document_number', sanitize_text_field($document_number));
+            $order->update_meta_data('_letztech_boleto_expiration', sanitize_text_field($boleto_expiration));
+            $order->update_meta_data('_letztech_boleto_amount', $boleto_amount);
+            $order->update_meta_data('_letztech_resolved_seller_id', $seller_id);
+            $order->set_transaction_id($transaction_id);
+            $order->update_status('on-hold', 'Aguardando pagamento do boleto');
+            $sku_note = !empty($seller_info['sku_used']) ? " (SKU: {$seller_info['sku_used']})" : '';
+            $order->add_order_note("Boleto gerado. ID: {$transaction_id}, Valor: R$ " . number_format($boleto_amount, 2, ',', '.'));
+            $order->add_order_note("Pagamento processado com Seller ID: {$seller_id}{$sku_note}");
+            $order->save();
+
+            WC()->session->set('zoop_boleto_details', [
+                'barcode' => $barcode,
+                'url' => $boleto_url,
+                'document_number' => $document_number,
+                'expiration_date' => $boleto_expiration,
+                'amount' => $boleto_amount,
+                'idTransacao' => $transaction_id
+            ]);
+
+            wc_add_notice(__('Boleto gerado com sucesso!', 'wc-zoop-payments'), 'success');
+
+            return [
+                'result' => 'success',
+                'redirect' => $this->get_return_url($order)
+            ];
+        } else {
+            $error = $body['error']['message'] ?? (isset($body['errors']) ? implode(', ', $body['errors']) : 'Erro desconhecido');
+            $order->update_status('failed', 'Boleto recusado');
+            $order->add_order_note('Boleto recusado: ' . $error);
+            wc_add_notice(__('Pagamento falhou:', 'wc-zoop-payments') . ' ' . esc_html($error), 'error');
             return;
         }
     }
-
-    $seller_info = wc_zoop_get_seller_id_for_order($order);
-    $seller_id   = $seller_info['seller_id'];
-    if (empty($seller_id)) {
-        error_log('WC Letztech-payment Boleto: Seller ID não configurado');
-        wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
-        return;
-    }
-
-    $total = $order->get_total();
-    $amount = (int)($total * 100); // Em centavos
-    $expiration_date = date('Y-m-d', strtotime('+7 days'));
-
-    $payload = [
-        'amount' => $amount,
-        'description' => 'Compra para o pedido #' . $order_id,
-        'expiration_date' => $expiration_date,
-        'seller_id' => sanitize_text_field($seller_id),
-        'buyer' => [
-            'first_name' => sanitize_text_field($_POST['billing_first_name']),
-            'last_name' => sanitize_text_field($_POST['billing_last_name']),
-            'email' => sanitize_email($_POST['billing_email']),
-            'phone_number' => preg_replace('/\D/', '', $_POST['billing_phone']),
-            'taxpayer_id' => preg_replace('/\D/', '', $_POST['customer_cpf']),
-            'birthdate' => sanitize_text_field($_POST['customer_birthdate']),
-            'address' => [
-                'line1' => sanitize_text_field($_POST['billing_address_1']),
-                'line2' => sanitize_text_field($_POST['billing_address_2']),
-                'line3' => sanitize_text_field($_POST['billing_address_3'] ?? ''),
-                'neighborhood' => sanitize_text_field($_POST['billing_neighborhood']),
-                'city' => sanitize_text_field($_POST['billing_city']),
-                'state' => sanitize_text_field($_POST['billing_state']),
-                'postal_code' => preg_replace('/\D/', '', $_POST['billing_postcode'])
-            ]
-        ]
-    ];
-
-
-    $split_seller     = $seller_info['seller_id_split1'];
-    $split_percentage = floatval($seller_info['percentage_split1']);
-
-    if (!empty($split_seller) && $split_percentage > 0 && $split_percentage <= 100) {
-        $payload['seller_id_split1']  = sanitize_text_field($split_seller);
-        $payload['percentage_split1'] = $split_percentage;
-        error_log("WC Letztech Boleto: Split ativado → seller_id_split1: {$split_seller}, percentage_split1: {$split_percentage}%");
-    } else {
-        $payload['seller_id_split1']  = '';
-        $payload['percentage_split1'] = 0.0;
-        error_log('WC Letztech Boleto: Split desativado');
-    }
-    error_log('WC Letztech-payment Boleto: Payload final: ' . json_encode($payload, JSON_PRETTY_PRINT));
-
-    $response = wp_remote_post('http://186.249.36.174/api/transactions/boleto', [
-        'body' => json_encode($payload),
-        'headers' => ['Content-Type' => 'application/json'],
-        'timeout' => 30
-    ]);
-
-    if (is_wp_error($response)) {
-        $error = $response->get_error_message();
-        error_log('WC Letztech-payment Boleto: Erro WP: ' . $error);
-        wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
-        return;
-    }
-
-    $code = wp_remote_retrieve_response_code($response);
-    $body = json_decode(wp_remote_retrieve_body($response), true);
-
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        error_log('WC Letztech-payment Boleto: JSON inválido na resposta');
-        wc_add_notice(__('Falha ao realizar pagamento.', 'wc-zoop-payments'), 'error');
-        return;
-    }
-
-    if ($code == 201 && isset($body['idTransacao'])) {
-        $transaction_id = sanitize_text_field($body['idTransacao']);
-        $barcode = $body['barcode'] ?? '';
-        $boleto_url = $body['url'] ?? '';
-        $document_number = $body['document_number'] ?? '';
-        $boleto_expiration = $body['expiration_date'] ?? $expiration_date;
-        $boleto_amount = floatval($body['amount'] ?? $amount) / 100;
-
-        // Salvar metadados
-        $order->update_meta_data('_letztech_transaction_id', $transaction_id);
-        $order->update_meta_data('_letztech_boleto_barcode', sanitize_text_field($barcode));
-        $order->update_meta_data('_letztech_boleto_url', esc_url_raw($boleto_url));
-        $order->update_meta_data('_letztech_boleto_document_number', sanitize_text_field($document_number));
-        $order->update_meta_data('_letztech_boleto_expiration', sanitize_text_field($boleto_expiration));
-        $order->update_meta_data('_letztech_boleto_amount', $boleto_amount);
-        $order->update_meta_data('_letztech_resolved_seller_id', $seller_id);
-        $order->set_transaction_id($transaction_id);
-        $order->update_status('on-hold', 'Aguardando pagamento do boleto');
-        $sku_note = !empty($seller_info['sku_used']) ? " (SKU: {$seller_info['sku_used']})" : '';
-        $order->add_order_note("Boleto gerado. ID: {$transaction_id}, Valor: R$ " . number_format($boleto_amount, 2, ',', '.'));
-        $order->add_order_note("Pagamento processado com Seller ID: {$seller_id}{$sku_note}");
-        $order->save();
-
-        // Armazenar na sessão para thank you page
-        WC()->session->set('zoop_boleto_details', [
-            'barcode' => $barcode,
-            'url' => $boleto_url,
-            'document_number' => $document_number,
-            'expiration_date' => $boleto_expiration,
-            'amount' => $boleto_amount,
-            'idTransacao' => $transaction_id
-        ]);
-
-        wc_add_notice(__('Boleto gerado com sucesso!', 'wc-zoop-payments'), 'success');
-
-        return [
-            'result' => 'success',
-            'redirect' => $this->get_return_url($order)
-        ];
-    } else {
-        $error = $body['error']['message'] ?? (isset($body['errors']) ? implode(', ', $body['errors']) : 'Erro desconhecido');
-        error_log('WC Letztech-payment Boleto: Falha: ' . $error);
-        $order->update_status('failed', 'Boleto recusado');
-        $order->add_order_note('Boleto recusado: ' . $error);
-        wc_add_notice(__('Pagamento falhou:', 'wc-zoop-payments') . ' ' . esc_html($error), 'error');
-        return;
-    }
-}
 
 public function display_boleto_details($order_id)
 {
@@ -651,10 +602,12 @@ public function display_boleto_details($order_id)
     <?php
     WC()->session->set('zoop_boleto_details', null);
 }
+    // KNOWN GAP: process_payment() now stores the Letztech gateway's own payment ID
+    // (pay_...), but this still polls the legacy backend, which has never heard of
+    // that ID -- status polling is broken until the gateway exposes a status/webhook
+    // endpoint (tracked separately; same gap as the credit card and Pix gateways).
     public function check_transaction_status($transaction_id)
     {
-        error_log('WC Letztech-payment Boleto: Iniciando consulta de status da transação: ' . $transaction_id);
-
         $response = wp_remote_get("http://186.249.36.174/api/transactions/boleto/{$transaction_id}", [
             'headers' => [
                 'Content-Type' => 'application/json',

@@ -62,7 +62,11 @@ function wc_zoop_payment_init() {
     error_log('WC Letztech-payment: Initializing plugin');
 
     require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-pix.php';
-    require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-recurrence.php';
+    // Recurrence disabled: the Letztech gateway has no subscription/recurring-billing
+    // support at all (no endpoint exists), so this can't be migrated off the legacy
+    // backend like the others were. File kept for when that support gets built --
+    // see class-wc-gateway-zoop-recurrence.php and the tracking issue for this.
+    // require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-recurrence.php';
     require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-boleto.php';
     require_once plugin_dir_path(__FILE__) . 'includes/class-wc-gateway-zoop-credit-card-interest.php';
 
@@ -235,7 +239,8 @@ function wc_zoop_add_gateways($gateways) {
     error_log('WC Letztech-payment: Adding gateways');
     $gateways[] = 'WC_Gateway_Zoop_Credit_Card_Interest';
     $gateways[] = 'WC_Gateway_Zoop_PIX';
-    $gateways[] = 'WC_Gateway_Zoop_Recurrence';
+    // See disabled require_once above -- no backend support to run this through yet.
+    // $gateways[] = 'WC_Gateway_Zoop_Recurrence';
     $gateways[] = 'WC_Gateway_Zoop_Boleto';
     error_log('WC Letztech-payment: Gateways added: ' . print_r($gateways, true));
     return $gateways;
